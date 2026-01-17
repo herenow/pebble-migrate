@@ -205,6 +205,10 @@ func (p *MigrationPlanner) PlanDowngrade(targetVersion int64) (*ExecutionPlan, e
 	for i := len(migrationsToRollback) - 1; i >= 0; i-- {
 		m := migrationsToRollback[i]
 		if currentSchema.AppliedMigrations[m.ID] {
+			// Check if migration is reversible (has a Down function)
+			if !m.IsReversible() {
+				return nil, fmt.Errorf("migration '%s' is irreversible (has no Down function) and cannot be rolled back", m.ID)
+			}
 			rollbackMigrations = append(rollbackMigrations, m)
 		}
 	}
@@ -223,6 +227,12 @@ func (p *MigrationPlanner) PlanRerun(migrationID string) (*ExecutionPlan, error)
 	migration, exists := p.registry.GetMigration(migrationID)
 	if !exists {
 		return nil, fmt.Errorf("migration '%s' not found", migrationID)
+	}
+
+	// Check if migration is reversible (has a Down function)
+	// Rerun requires Down + Up, so the migration must be reversible
+	if !migration.IsReversible() {
+		return nil, fmt.Errorf("migration '%s' is irreversible (has no Down function) and cannot be rerun", migrationID)
 	}
 
 	currentSchema, err := p.schema.GetSchemaVersion()

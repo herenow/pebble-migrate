@@ -112,17 +112,23 @@ func runHistoryCommand(cmd *cobra.Command, args []string) error {
 func NewForceCleanCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "force-clean",
-		Short: "Force the database to clean state (DANGEROUS)",
-		Long: `Force the database schema state to clean.
+		Short: "Force the database to clean state and repair inconsistencies (DANGEROUS)",
+		Long: `Force the database schema state to clean and repair inconsistencies.
+
+This command will:
+1. Set the schema status to 'clean'
+2. Rebuild AppliedMigrations from MigrationHistory to fix any inconsistencies
 
 WARNING: This is a dangerous operation that should only be used when
 the database is in a dirty or inconsistent state and you know what
-you're doing. This command bypasses all safety checks.
+you're doing.
 
 Use this command only if:
 - You understand the current state of your database
 - You have backups of your data
-- Normal migration operations are failing due to state issues`,
+- Normal migration operations are failing due to state issues
+
+For more severe corruption, use 'force-reset' instead.`,
 		RunE: runForceCleanCommand,
 	}
 
@@ -180,6 +186,98 @@ func runForceCleanCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	PrintSuccess("Database state forced to clean.\n")
+	PrintWarning("Please verify your database state and run validate command.\n")
+
+	return nil
+}
+
+// NewForceResetCommand creates the force-reset command
+func NewForceResetCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "force-reset",
+		Short: "Completely reset schema state (VERY DANGEROUS)",
+		Long: `Completely reset the schema state while preserving the current version.
+
+This command will:
+1. Clear all migration history
+2. Clear all applied migrations tracking
+3. Set status to 'clean'
+4. Preserve the current version number (migrations won't re-run)
+
+WARNING: This is an extremely dangerous operation that should only be used
+when the schema state is corrupted beyond repair by force-clean.
+
+Use this command only if:
+- force-clean didn't fix the issue
+- You understand the current state of your database
+- You have backups of your data
+- You know which migrations have actually been applied to your data`,
+		RunE: runForceResetCommand,
+	}
+
+	return cmd
+}
+
+func runForceResetCommand(cmd *cobra.Command, args []string) error {
+	config, err := GetGlobalConfig(cmd)
+	if err != nil {
+		return err
+	}
+
+	if config.DryRun {
+		PrintInfo("DRY RUN: Would completely reset schema state\n")
+		return nil
+	}
+
+	// Open database
+	db, err := OpenDatabase(config.DatabasePath, false)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	// Create schema manager
+	schemaManager, _, _ := CreateMigrationServices(db)
+
+	// Show current state
+	currentSchema, err := schemaManager.GetSchemaVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get schema version: %w", err)
+	}
+
+	fmt.Printf("Current state: %s\n", currentSchema.Status)
+	fmt.Printf("Current version: %d (%s)\n", currentSchema.CurrentVersion, migrate.FormatVersionAsTime(currentSchema.CurrentVersion))
+	fmt.Printf("Applied migrations: %d\n", len(currentSchema.AppliedMigrations))
+	fmt.Printf("History records: %d\n", len(currentSchema.MigrationHistory))
+
+	// Multiple confirmations for this very dangerous operation
+	PrintWarning("DANGER: You are about to COMPLETELY RESET the schema state!\n")
+	PrintWarning("This will clear ALL migration history and applied migrations tracking.\n")
+	PrintWarning("The current version will be preserved, so migrations won't re-run.\n")
+	PrintWarning("Make sure you have backups and understand the implications.\n\n")
+
+	if !ConfirmAction("Do you understand the risks and want to continue?") {
+		PrintInfo("Operation cancelled.\n")
+		return nil
+	}
+
+	if !ConfirmAction("Are you ABSOLUTELY SURE you want to reset the schema state?") {
+		PrintInfo("Operation cancelled.\n")
+		return nil
+	}
+
+	if !ConfirmAction("Final confirmation - type 'yes' to proceed:") {
+		PrintInfo("Operation cancelled.\n")
+		return nil
+	}
+
+	// Force reset state
+	if err := schemaManager.ForceResetState(); err != nil {
+		return fmt.Errorf("failed to reset schema state: %w", err)
+	}
+
+	PrintSuccess("Schema state has been completely reset.\n")
+	PrintInfo("Current version preserved at: %d\n", currentSchema.CurrentVersion)
 	PrintWarning("Please verify your database state and run validate command.\n")
 
 	return nil

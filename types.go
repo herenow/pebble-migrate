@@ -45,9 +45,14 @@ type Migration struct {
 	Dependencies []string      // IDs of migrations that must be applied before this one
 	Description  string
 	Up           MigrationFunc
-	Down         MigrationFunc
+	Down         MigrationFunc // Can be nil for irreversible (one-way) migrations
 	Validate     MigrationFunc
 	Rerunnable   bool          // If true, migration can be safely rerun if interrupted
+}
+
+// IsReversible returns true if the migration can be rolled back (has a Down function)
+func (m *Migration) IsReversible() bool {
+	return m.Down != nil
 }
 
 // MigrationFunc is the signature for migration functions
@@ -67,7 +72,8 @@ func NewMigrationRegistry() *MigrationRegistry {
 	}
 }
 
-// Register adds a migration to the registry
+// Register adds a migration to the registry.
+// Note: Down can be nil for irreversible migrations (one-way migrations that cannot be rolled back).
 func (r *MigrationRegistry) Register(m *Migration) error {
 	if _, exists := r.migrations[m.ID]; exists {
 		return fmt.Errorf("migration with ID '%s' already registered", m.ID)
@@ -80,9 +86,7 @@ func (r *MigrationRegistry) Register(m *Migration) error {
 	if m.Up == nil {
 		return fmt.Errorf("migration '%s' must have an Up function", m.ID)
 	}
-	if m.Down == nil {
-		return fmt.Errorf("migration '%s' must have a Down function", m.ID)
-	}
+	// Note: Down can be nil for irreversible migrations
 
 	// Parse and validate Unix timestamp from ID
 	version, err := ParseMigrationVersion(m.ID)

@@ -48,6 +48,7 @@ This tool allows you to:
 	rootCmd.AddCommand(commands.NewCreateCommand())
 	rootCmd.AddCommand(commands.NewHistoryCommand())
 	rootCmd.AddCommand(commands.NewForceCleanCommand())
+	rootCmd.AddCommand(commands.NewForceResetCommand())
 	rootCmd.AddCommand(commands.NewBackupCommand())
 
 	// Execute the root command

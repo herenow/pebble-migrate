@@ -272,15 +272,74 @@ func isRollbackRecord(id string) bool {
 	return len(id) > 9 && id[len(id)-9:] == "_rollback"
 }
 
-// ForceCleanState forces the schema to clean state (use with caution)
+// ForceCleanState forces the schema to clean state and repairs any inconsistencies
+// between AppliedMigrations and MigrationHistory (use with caution).
+// This will:
+// 1. Set status to clean
+// 2. Sync AppliedMigrations to match successful records in MigrationHistory
 func (s *SchemaManager) ForceCleanState() error {
 	currentSchema, err := s.GetSchemaVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get current schema version: %w", err)
 	}
 
+	// Rebuild AppliedMigrations from MigrationHistory to fix inconsistencies
+	successfulMigrations := make(map[string]bool)
+	for _, record := range currentSchema.MigrationHistory {
+		if record.Success && !isRollbackRecord(record.ID) {
+			successfulMigrations[record.ID] = true
+		} else if isRollbackRecord(record.ID) && record.Success {
+			// Remove original migration from successful set if rollback succeeded
+			originalID := record.ID[:len(record.ID)-9] // Remove "_rollback" suffix
+			delete(successfulMigrations, originalID)
+		}
+	}
+
+	currentSchema.AppliedMigrations = successfulMigrations
 	currentSchema.Status = StatusClean
 	return s.SetSchemaVersion(currentSchema)
+}
+
+// ForceResetState completely resets the schema state while preserving the current version.
+// This is useful when the schema state is corrupted beyond repair.
+// WARNING: This will clear all migration history and applied migrations tracking.
+// The current version is preserved, so migrations won't re-run unless you also reset the version.
+func (s *SchemaManager) ForceResetState() error {
+	currentSchema, err := s.GetSchemaVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get current schema version: %w", err)
+	}
+
+	// Keep the current version but reset everything else
+	return s.SetSchemaVersion(&SchemaVersion{
+		CurrentVersion:    currentSchema.CurrentVersion,
+		AppliedMigrations: make(map[string]bool),
+		MigrationHistory:  make([]MigrationRecord, 0),
+		LastMigrationAt:   time.Time{},
+		Status:            StatusClean,
+	})
+}
+
+// ForceResetToVersion completely resets the schema state and sets a specific version.
+// All migrations with version <= the specified version will be marked as applied.
+// This is useful for recovering from a corrupted state when you know which migrations
+// have actually been applied to the data.
+func (s *SchemaManager) ForceResetToVersion(version int64, registry *MigrationRegistry) error {
+	// Build applied migrations set from registry based on version
+	appliedMigrations := make(map[string]bool)
+	for _, m := range registry.GetMigrations() {
+		if m.Version <= version {
+			appliedMigrations[m.ID] = true
+		}
+	}
+
+	return s.SetSchemaVersion(&SchemaVersion{
+		CurrentVersion:    version,
+		AppliedMigrations: appliedMigrations,
+		MigrationHistory:  make([]MigrationRecord, 0),
+		LastMigrationAt:   time.Time{},
+		Status:            StatusClean,
+	})
 }
 
 // InitializeFreshDatabase initializes schema for databases without __schema_version.
