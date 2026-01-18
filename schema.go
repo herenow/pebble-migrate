@@ -325,20 +325,32 @@ func (s *SchemaManager) InitializeFreshDatabase(registry *MigrationRegistry) err
 		})
 	}
 
-	// Find max version and mark all as applied
+	// Find max version and mark all as applied WITH history records
 	var maxVersion int64
 	appliedMigrations := make(map[string]bool)
+	migrationHistory := make([]MigrationRecord, 0, len(migrations))
+	now := time.Now()
+
 	for _, m := range migrations {
 		if m.Version > maxVersion {
 			maxVersion = m.Version
 		}
 		appliedMigrations[m.ID] = true
+
+		// Create synthetic history record for fresh db initialization
+		migrationHistory = append(migrationHistory, MigrationRecord{
+			ID:          m.ID,
+			Description: m.Description + " (skipped - fresh database)",
+			AppliedAt:   now,
+			Duration:    "0s",
+			Success:     true,
+		})
 	}
 
 	return s.SetSchemaVersion(&SchemaVersion{
 		CurrentVersion:    maxVersion,
 		AppliedMigrations: appliedMigrations,
-		MigrationHistory:  make([]MigrationRecord, 0),
+		MigrationHistory:  migrationHistory,
 		Status:            StatusClean,
 	})
 }
