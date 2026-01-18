@@ -49,6 +49,7 @@ This tool allows you to:
 	rootCmd.AddCommand(commands.NewHistoryCommand())
 	rootCmd.AddCommand(commands.NewForceCleanCommand())
 	rootCmd.AddCommand(commands.NewBackupCommand())
+	rootCmd.AddCommand(commands.NewRepairCommand())
 
 	// Execute the root command
 	if err := rootCmd.Execute(); err != nil {

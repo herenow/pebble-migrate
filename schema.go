@@ -273,6 +273,8 @@ func isRollbackRecord(id string) bool {
 }
 
 // ForceCleanState forces the schema to clean state (use with caution)
+// Note: This only changes the Status field. It does NOT fix missing history records.
+// Use RepairMissingHistory() to fix consistency issues between AppliedMigrations and MigrationHistory.
 func (s *SchemaManager) ForceCleanState() error {
 	currentSchema, err := s.GetSchemaVersion()
 	if err != nil {
@@ -281,6 +283,61 @@ func (s *SchemaManager) ForceCleanState() error {
 
 	currentSchema.Status = StatusClean
 	return s.SetSchemaVersion(currentSchema)
+}
+
+// RepairMissingHistory creates synthetic history records for any migrations
+// that are marked as applied but don't have corresponding history entries.
+// This fixes the inconsistency that causes ValidateSchemaState() to fail.
+func (s *SchemaManager) RepairMissingHistory(registry *MigrationRegistry) ([]string, error) {
+	currentSchema, err := s.GetSchemaVersion()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get schema version: %w", err)
+	}
+
+	// Build set of migrations that have successful history records
+	successfulInHistory := make(map[string]bool)
+	for _, record := range currentSchema.MigrationHistory {
+		if record.Success && !isRollbackRecord(record.ID) {
+			successfulInHistory[record.ID] = true
+		}
+	}
+
+	// Find applied migrations missing from history
+	var repaired []string
+	now := time.Now()
+
+	for migrationID := range currentSchema.AppliedMigrations {
+		if !successfulInHistory[migrationID] {
+			// Look up migration description from registry
+			description := "unknown migration"
+			if m, ok := registry.GetMigration(migrationID); ok {
+				description = m.Description
+			}
+
+			// Create synthetic history record
+			currentSchema.MigrationHistory = append(currentSchema.MigrationHistory, MigrationRecord{
+				ID:          migrationID,
+				Description: description + " (repaired - missing history)",
+				AppliedAt:   now,
+				Duration:    "0s",
+				Success:     true,
+			})
+			repaired = append(repaired, migrationID)
+		}
+	}
+
+	if len(repaired) == 0 {
+		return nil, nil // Nothing to repair
+	}
+
+	// Also ensure status is clean
+	currentSchema.Status = StatusClean
+
+	if err := s.SetSchemaVersion(currentSchema); err != nil {
+		return nil, fmt.Errorf("failed to save repaired schema: %w", err)
+	}
+
+	return repaired, nil
 }
 
 // InitializeFreshDatabase initializes schema for databases without __schema_version.
